@@ -1,0 +1,1694 @@
+"""
+saudevip_atendente.py
+─────────────────────────────────────────────────
+Sistema da Saúde VIP — Com painel de Atendente
+
+Fluxos de acesso:
+  - Médico   → dashboard clínico completo
+  - Atendente → recepção, agendamento, cadastro e filas
+─────────────────────────────────────────────────
+"""
+
+# ══════════════════════════════════════════════════════════════
+#  IMPORTS
+#  tkinter  → biblioteca de interface gráfica padrão do Python
+#  hashlib  → usado para encriptar senhas com SHA-256
+#  time     → para saudação baseada na hora do dia
+# ══════════════════════════════════════════════════════════════
+import tkinter as tk
+from tkinter import messagebox, ttk
+import hashlib
+import time
+
+# ══════════════════════════════════════════════════════════════
+#  PALETA DE CORES
+#  Todas as cores do sistema ficam aqui, centralizadas.
+#  Assim, para mudar uma cor, basta alterar neste dicionário.
+# ══════════════════════════════════════════════════════════════
+C = {
+    "bg_deep":    "#0a1628",   # fundo principal escuro
+    "bg_panel":   "#0f2044",   # painéis laterais e navbar
+    "bg_card":    "#132952",   # cartões internos
+    "border":     "#1e3a6e",   # bordas sutis
+    "accent":     "#00c9a7",   # verde-água (destaque médicos)
+    "accent_dim": "#009d82",   # versão mais escura do accent
+    "accent2":    "#4f8ef7",   # azul (destaque atendentes)
+    "accent2_dim":"#3a6fd6",   # versão mais escura do accent2
+    "success":    "#3fb950",   # verde de sucesso
+    "danger":     "#f85149",   # vermelho de erro/alerta
+    "warning":    "#f0a732",   # amarelo de aviso
+    "text_hi":    "#e8f4fd",   # texto principal (claro)
+    "text_mid":   "#7eb8d4",   # texto secundário
+    "text_lo":    "#3d6b85",   # texto terciário (muito suave)
+    "white":      "#ffffff",
+    "purple":     "#a371f7",   # destaque extra
+    "orange":     "#ff8c42",   # badge de fila/espera
+}
+
+# ══════════════════════════════════════════════════════════════
+#  BANCO DE DADOS EM MEMÓRIA
+#  Simula um banco real. Cada chave representa uma "tabela".
+#  Em produção, substituir por SQLite, PostgreSQL etc.
+# ══════════════════════════════════════════════════════════════
+DB = {
+
+    # ── USUÁRIOS ──────────────────────────────────────────────
+    # Chave = nome de login. Valor = dicionário com dados.
+    # "tipo" define qual dashboard será aberto após login.
+    "usuarios": {
+
+        # --- Médicos de exemplo ---
+        "admin": {
+            "hash": hashlib.sha256("admin123".encode()).hexdigest(),
+            "tipo": "medico",
+            "nome": "Dr. Admin Silva",
+            "crm": "CRM/SP 123456",
+            "especialidade": "Clínica Geral",
+            "email": "admin@saudevip.com",
+            "telefone": "(11) 99999-0001",
+        },
+        "dra_ana": {
+            "hash": hashlib.sha256("ana123".encode()).hexdigest(),
+            "tipo": "medico",
+            "nome": "Dra. Ana Costa",
+            "crm": "CRM/RJ 654321",
+            "especialidade": "Cardiologia",
+            "email": "ana@saudevip.com",
+            "telefone": "(21) 99999-0002",
+        },
+
+        # --- Atendentes de exemplo ---
+        "recepcao": {
+            "hash": hashlib.sha256("recep123".encode()).hexdigest(),
+            "tipo": "atendente",
+            "nome": "Fernanda Souza",
+            "setor": "Recepção Principal",
+            "email": "fernanda@saudevip.com",
+            "telefone": "(11) 3333-0001",
+            "turno": "Manhã (07h–13h)",
+        },
+        "atend2": {
+            "hash": hashlib.sha256("at123".encode()).hexdigest(),
+            "tipo": "atendente",
+            "nome": "Carlos Henrique",
+            "setor": "Recepção Especialidades",
+            "email": "carlos@saudevip.com",
+            "telefone": "(11) 3333-0002",
+            "turno": "Tarde (13h–19h)",
+        },
+    },
+
+    # ── PACIENTES ─────────────────────────────────────────────
+    # Cadastro de pacientes gerenciado pelos atendentes.
+    # Separado de "usuarios" pois paciente não faz login.
+    "pacientes": {
+        "p001": {
+            "nome": "João da Silva",
+            "cpf": "123.456.789-00",
+            "nascimento": "15/03/1985",
+            "email": "joao@email.com",
+            "telefone": "(11) 98888-1111",
+            "plano": "Unimed Gold",
+            "tipo_sanguineo": "A+",
+            "alergias": "Penicilina",
+            "medico_resp": "Dr. Admin Silva",
+        },
+        "p002": {
+            "nome": "Maria Oliveira",
+            "cpf": "987.654.321-00",
+            "nascimento": "22/07/1992",
+            "email": "maria@email.com",
+            "telefone": "(11) 97777-2222",
+            "plano": "Bradesco Saúde",
+            "tipo_sanguineo": "O-",
+            "alergias": "Nenhuma",
+            "medico_resp": "Dra. Ana Costa",
+        },
+        "p003": {
+            "nome": "Carlos Mendes",
+            "cpf": "555.444.333-11",
+            "nascimento": "08/11/1978",
+            "email": "carlos.m@email.com",
+            "telefone": "(11) 96666-3333",
+            "plano": "Amil",
+            "tipo_sanguineo": "B+",
+            "alergias": "Nenhuma",
+            "medico_resp": "Dr. Admin Silva",
+        },
+    },
+
+    # ── CONSULTAS AGENDADAS ───────────────────────────────────
+    # Lista de dicionários com todos os agendamentos do sistema.
+    "consultas": [
+        {"data": "14/04/2025", "hora": "09:00", "paciente": "João da Silva",  "medico": "Dr. Admin Silva",  "status": "Confirmada",  "tipo": "Retorno",  "convenio": "Unimed Gold"},
+        {"data": "14/04/2025", "hora": "10:30", "paciente": "Maria Oliveira", "medico": "Dra. Ana Costa",   "status": "Aguardando",  "tipo": "Consulta", "convenio": "Bradesco Saúde"},
+        {"data": "15/04/2025", "hora": "14:00", "paciente": "Carlos Mendes",  "medico": "Dr. Admin Silva",  "status": "Confirmada",  "tipo": "Consulta", "convenio": "Amil"},
+        {"data": "16/04/2025", "hora": "11:00", "paciente": "Lucia Torres",   "medico": "Dra. Ana Costa",   "status": "Confirmada",  "tipo": "Exame",    "convenio": "Particular"},
+    ],
+
+    # ── FILA DE ESPERA ────────────────────────────────────────
+    # Pacientes que chegaram e aguardam atendimento no dia.
+    "fila": [
+        {"senha": "A001", "nome": "João da Silva",  "tipo": "Consulta",  "medico": "Dr. Admin Silva",  "chegada": "08:47", "status": "Aguardando"},
+        {"senha": "A002", "nome": "Maria Oliveira", "tipo": "Retorno",   "medico": "Dra. Ana Costa",   "chegada": "09:05", "status": "Em atendimento"},
+        {"senha": "A003", "nome": "Pedro Costa",    "tipo": "Exame",     "medico": "Dr. Admin Silva",  "chegada": "09:22", "status": "Aguardando"},
+    ],
+}
+
+# ══════════════════════════════════════════════════════════════
+#  CONTADOR DE SENHAS DE FILA
+#  Começa em 4 porque já há 3 na fila de exemplo.
+# ══════════════════════════════════════════════════════════════
+_proximo_num_fila = [4]
+
+
+# ══════════════════════════════════════════════════════════════
+#  LOGO (Canvas tk desenhado via código)
+#  Recebe: pai=widget pai, bg=cor de fundo, escala=tamanho
+#  Retorna: widget Canvas pronto para .pack()
+# ══════════════════════════════════════════════════════════════
+def desenhar_logo(pai, bg, escala=1.0):
+    w, h = int(80 * escala), int(80 * escala)
+    c = tk.Canvas(pai, width=w, height=h, bg=bg, highlightthickness=0, bd=0)
+    cx, cy, r = w / 2, h / 2, int(34 * escala)
+    # Círculo externo
+    c.create_oval(cx - r, cy - r, cx + r, cy + r, outline=C["accent"], width=int(3 * escala))
+    # Cruz (símbolo de saúde)
+    bw, bl = int(8 * escala), int(20 * escala)
+    c.create_rectangle(cx - bw // 2, cy - bl, cx + bw // 2, cy + bl, fill=C["accent"], outline="")
+    c.create_rectangle(cx - bl, cy - bw // 2, cx + bl, cy + bw // 2, fill=C["accent"], outline="")
+    # Ponto central
+    pr = int(4 * escala)
+    c.create_oval(cx - pr, cy - pr, cx + pr, cy + pr, fill=C["bg_deep"], outline=C["accent"], width=int(2 * escala))
+    return c
+
+
+# ══════════════════════════════════════════════════════════════
+#  WIDGETS AUXILIARES REUTILIZÁVEIS
+#  Funções que criam componentes padronizados em qualquer tela.
+# ══════════════════════════════════════════════════════════════
+
+def rotulo(pai, texto, bg, top=0):
+    """Label pequeno de rótulo acima de um campo de formulário."""
+    tk.Label(pai, text=texto, font=("Helvetica", 9, "bold"),
+             bg=bg, fg=C["text_lo"], anchor="w").pack(fill=tk.X, pady=(top, 0))
+
+
+def campo(pai, bg, placeholder="", show=""):
+    """
+    Campo de entrada com borda destacada ao focar.
+    Suporta placeholder (texto cinza que some ao clicar)
+    e 'show' para campos de senha (ex: show='●').
+    """
+    frame = tk.Frame(pai, bg=C["bg_card"], highlightthickness=1, highlightbackground=C["border"])
+    frame.pack(fill=tk.X, pady=(4, 0))
+    e = tk.Entry(frame, font=("Helvetica", 13), bg=C["bg_card"], fg=C["text_hi"],
+                 insertbackground=C["accent"], relief=tk.FLAT, bd=8, show=show)
+    e.pack(fill=tk.BOTH, expand=True)
+    if placeholder:
+        e.insert(0, placeholder)
+        e.config(fg=C["text_lo"])
+        def fi(ev):
+            if e.get() == placeholder:
+                e.delete(0, tk.END)
+                e.config(fg=C["text_hi"])
+            frame.config(highlightbackground=C["accent"])
+        def fo(ev):
+            if not e.get():
+                e.insert(0, placeholder)
+                e.config(fg=C["text_lo"])
+            frame.config(highlightbackground=C["border"])
+        e.bind("<FocusIn>", fi)
+        e.bind("<FocusOut>", fo)
+    else:
+        e.bind("<FocusIn>",  lambda ev: frame.config(highlightbackground=C["accent"]))
+        e.bind("<FocusOut>", lambda ev: frame.config(highlightbackground=C["border"]))
+    return e
+
+
+def btn_primario(pai, texto, cmd, bg_cor=None):
+    """Botão principal com efeito hover. Cor padrão = accent_dim."""
+    bg_c = bg_cor or C["accent_dim"]
+    hover = C["accent"] if bg_c == C["accent_dim"] else C["accent2"]
+    b = tk.Button(pai, text=texto, font=("Helvetica", 12, "bold"),
+                  bg=bg_c, fg=C["white"], activebackground=hover,
+                  activeforeground=C["white"], cursor="hand2",
+                  relief=tk.FLAT, bd=0, pady=10, command=cmd)
+    b.pack(fill=tk.X, pady=(12, 0))
+    b.bind("<Enter>", lambda _: b.config(bg=hover))
+    b.bind("<Leave>", lambda _: b.config(bg=bg_c))
+    return b
+
+
+def separador(pai, bg=None, pady=12):
+    """Linha horizontal fina para dividir seções."""
+    tk.Frame(pai, bg=bg or C["border"], height=1).pack(fill=tk.X, pady=pady)
+
+
+def card_info(pai, titulo, valor, icon, cor_valor=None):
+    """
+    Card de métrica com ícone, título e valor grande.
+    Usado nos dashboards para exibir KPIs.
+    """
+    card = tk.Frame(pai, bg=C["bg_card"], highlightthickness=1, highlightbackground=C["border"])
+    card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+    inner = tk.Frame(card, bg=C["bg_card"])
+    inner.pack(padx=16, pady=14, fill=tk.X)
+    top = tk.Frame(inner, bg=C["bg_card"])
+    top.pack(fill=tk.X)
+    tk.Label(top, text=icon, font=("Arial", 18), bg=C["bg_card"], fg=cor_valor or C["accent"]).pack(side=tk.LEFT)
+    tk.Label(top, text=titulo, font=("Helvetica", 10), bg=C["bg_card"], fg=C["text_mid"]).pack(side=tk.LEFT, padx=8)
+    tk.Label(inner, text=valor, font=("Georgia", 28, "bold"), bg=C["bg_card"], fg=C["text_hi"]).pack(anchor="w", pady=(4, 0))
+    return card
+
+
+# ══════════════════════════════════════════════════════════════
+#  CLASSE PRINCIPAL DA APLICAÇÃO
+#  Toda a lógica de navegação e telas fica aqui.
+#  __init__ inicializa e exibe a tela de login.
+# ══════════════════════════════════════════════════════════════
+class App:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Sistema da Saúde VIP")
+        self.root.configure(bg=C["bg_deep"])
+        # F11 alterna tela cheia
+        self.root.bind("<F11>", self._toggle_fs)
+        self.root.bind("<Escape>", lambda e: self.root.attributes("-fullscreen", False))
+        self._mostrar_login()
+
+    def _toggle_fs(self, e=None):
+        """Alterna modo tela cheia."""
+        self.root.attributes("-fullscreen", not self.root.attributes("-fullscreen"))
+
+    def _limpar(self):
+        """Remove todos os widgets da janela (troca de tela)."""
+        for w in self.root.winfo_children():
+            w.destroy()
+
+    def _centralizar(self, w, h):
+        """Centraliza a janela na tela do monitor."""
+        self.root.update_idletasks()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        self.root.geometry(f"+{sw // 2 - w // 2}+{sh // 2 - h // 2}")
+
+    # ══════════════════════════════════════════════════════════
+    #  TELA DE LOGIN
+    #  Layout dividido: painel esquerdo (apresentação) +
+    #  painel direito (formulário de acesso).
+    # ══════════════════════════════════════════════════════════
+    def _mostrar_login(self):
+        self._limpar()
+        self.root.geometry("1100x680")
+        self.root.minsize(900, 580)
+        self._centralizar(1100, 680)
+
+        raiz = tk.Frame(self.root, bg=C["bg_deep"])
+        raiz.pack(fill=tk.BOTH, expand=True)
+
+        # ── Painel Esquerdo: identidade visual ─────────────────
+        esq = tk.Frame(raiz, bg=C["bg_panel"])
+        esq.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        centro = tk.Frame(esq, bg=C["bg_panel"])
+        centro.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        desenhar_logo(centro, C["bg_panel"], 1.4).pack(pady=(0, 16))
+        tk.Label(centro, text="Sistema da Saúde", font=("Georgia", 28, "bold"), bg=C["bg_panel"], fg=C["text_hi"]).pack()
+        tk.Label(centro, text="VIP", font=("Georgia", 28, "bold"), bg=C["bg_panel"], fg=C["accent"]).pack()
+        tk.Frame(centro, bg=C["accent"], height=2, width=160).pack(pady=20)
+        tk.Label(centro, text="Acesso separado para\nMédicos e Atendentes",
+                 font=("Helvetica", 12), bg=C["bg_panel"], fg=C["text_mid"],
+                 justify=tk.CENTER).pack(pady=(0, 24))
+        for t in [("🩺", "Médicos — dashboard clínico completo"),
+                  ("🖥️", "Atendentes — recepção e agendamento")]:
+            row = tk.Frame(centro, bg=C["bg_panel"])
+            row.pack(anchor="w", pady=4)
+            tk.Label(row, text=t[0], font=("Arial", 14), bg=C["bg_panel"], fg=C["accent"]).pack(side=tk.LEFT, padx=(0, 8))
+            tk.Label(row, text=t[1], font=("Helvetica", 11), bg=C["bg_panel"], fg=C["text_mid"]).pack(side=tk.LEFT)
+        tk.Label(esq, text="© 2026 Sistema da Saúde VIP", font=("Helvetica", 9), bg=C["bg_panel"], fg=C["text_lo"]).pack(side=tk.BOTTOM, pady=12)
+
+        # Divisor vertical
+        tk.Frame(raiz, bg=C["border"], width=1).pack(side=tk.LEFT, fill=tk.Y)
+
+        # ── Painel Direito: formulário ─────────────────────────
+        dir_ = tk.Frame(raiz, bg=C["bg_deep"], width=440)
+        dir_.pack(side=tk.RIGHT, fill=tk.BOTH)
+        dir_.pack_propagate(False)
+        form = tk.Frame(dir_, bg=C["bg_deep"])
+        form.place(relx=0.5, rely=0.5, anchor=tk.CENTER, width=340)
+
+        tk.Label(form, text="Bem-vindo de volta", font=("Georgia", 22, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(anchor="w")
+        tk.Label(form, text="Entre com suas credenciais.", font=("Helvetica", 11), bg=C["bg_deep"], fg=C["text_mid"]).pack(anchor="w", pady=(4, 24))
+
+        rotulo(form, "USUÁRIO", C["bg_deep"])
+        self._e_usuario = campo(form, C["bg_deep"])
+
+        rotulo(form, "SENHA", C["bg_deep"], top=14)
+        # Campo de senha com botão para mostrar/ocultar
+        sf = tk.Frame(form, bg=C["bg_card"], highlightthickness=1, highlightbackground=C["border"])
+        sf.pack(fill=tk.X, pady=(4, 0))
+        self._e_senha = tk.Entry(sf, font=("Helvetica", 13), bg=C["bg_card"], fg=C["text_hi"],
+                                 insertbackground=C["accent"], relief=tk.FLAT, show="●", bd=8)
+        self._e_senha.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tk.Button(sf, text="◎", font=("Helvetica", 13), bg=C["bg_card"], fg=C["text_mid"],
+                  activebackground=C["bg_card"], activeforeground=C["accent"],
+                  relief=tk.FLAT, bd=0, cursor="hand2",
+                  command=lambda: self._e_senha.config(
+                      show="" if self._e_senha.cget("show") == "●" else "●"
+                  )).pack(side=tk.RIGHT, padx=(0, 8))
+
+        separador(form, C["bg_deep"], pady=16)
+
+        # Label de status (erro/sucesso)
+        self._lbl_status_login = tk.Label(form, text="", font=("Helvetica", 10), bg=C["bg_deep"], fg=C["danger"])
+        self._lbl_status_login.pack()
+
+        btn_primario(form, "  Entrar  →", self._fazer_login)
+
+        separador(form, pady=16)
+
+        # Link para cadastro de atendente
+        linha_cad = tk.Frame(form, bg=C["bg_deep"])
+        linha_cad.pack()
+        tk.Label(linha_cad, text="Novo atendente? ", font=("Helvetica", 11), bg=C["bg_deep"], fg=C["text_mid"]).pack(side=tk.LEFT)
+        lk = tk.Label(linha_cad, text="Cadastrar", font=("Helvetica", 11, "bold"), bg=C["bg_deep"], fg=C["accent2"], cursor="hand2")
+        lk.pack(side=tk.LEFT, padx=4)
+        lk.bind("<Button-1>", lambda e: self._mostrar_cadastro_atendente())
+
+        # ── Caixa de contas para teste ─────────────────────────
+        info = tk.Frame(form, bg=C["bg_card"], highlightthickness=1, highlightbackground=C["border"])
+        info.pack(fill=tk.X, pady=(16, 0))
+        tk.Label(info, text="Contas para teste", font=("Helvetica", 9, "bold"), bg=C["bg_card"], fg=C["warning"]).pack(anchor="w", padx=12, pady=(8, 2))
+        for usr, pwd, tp in [("admin", "admin123", "Médico"), ("dra_ana", "ana123", "Médico"),
+                              ("recepcao", "recep123", "Atendente"), ("atend2", "at123", "Atendente")]:
+            l = tk.Frame(info, bg=C["bg_card"])
+            l.pack(fill=tk.X, padx=12, pady=1)
+            tk.Label(l, text=f"{usr}", font=("Courier", 9, "bold"), bg=C["bg_card"], fg=C["text_mid"]).pack(side=tk.LEFT)
+            tk.Label(l, text=f" / {pwd}  [{tp}]", font=("Courier", 9), bg=C["bg_card"], fg=C["text_lo"]).pack(side=tk.LEFT)
+        tk.Label(info, text="F11 tela cheia  |  Enter para entrar", font=("Helvetica", 8), bg=C["bg_card"], fg=C["text_lo"]).pack(pady=(4, 8))
+
+        self._e_usuario.focus()
+        self.root.bind("<Return>", lambda _: self._fazer_login())
+
+    def _fazer_login(self):
+        """
+        Valida usuário e senha.
+        Se corretos, redireciona para o dashboard correspondente ao 'tipo'.
+        """
+        u = self._e_usuario.get().strip()
+        s = self._e_senha.get()
+        if not u or not s:
+            self._lbl_status_login.config(text="Preencha todos os campos.")
+            return
+        h = hashlib.sha256(s.encode()).hexdigest()
+        if u in DB["usuarios"] and DB["usuarios"][u]["hash"] == h:
+            self._lbl_status_login.config(text="Autenticando…", fg=C["success"])
+            tipo = DB["usuarios"][u]["tipo"]
+            if tipo == "medico":
+                self.root.after(350, lambda: self._mostrar_dashboard_medico(u))
+            else:  # atendente
+                self.root.after(350, lambda: self._mostrar_dashboard_atendente(u))
+        else:
+            self._lbl_status_login.config(text="Usuário ou senha incorretos.", fg=C["danger"])
+            self._e_senha.delete(0, tk.END)
+
+    # ══════════════════════════════════════════════════════════
+    #  CADASTRO DE ATENDENTE
+    #  Formulário simples com dados profissionais.
+    #  Ao concluir, vai direto ao dashboard de atendente.
+    # ══════════════════════════════════════════════════════════
+    def _mostrar_cadastro_atendente(self):
+        self._limpar()
+        self.root.geometry("1100x700")
+        self._centralizar(1100, 700)
+        self.root.bind("<Return>", lambda _: self._fazer_cadastro_atendente())
+
+        raiz = tk.Frame(self.root, bg=C["bg_deep"])
+        raiz.pack(fill=tk.BOTH, expand=True)
+
+        # ── Esquerdo: apresentação ─────────────────────────────
+        esq = tk.Frame(raiz, bg=C["bg_panel"])
+        esq.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        centro = tk.Frame(esq, bg=C["bg_panel"])
+        centro.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        desenhar_logo(centro, C["bg_panel"], 1.3).pack(pady=(0, 14))
+        tk.Label(centro, text="Cadastro de", font=("Georgia", 22, "bold"), bg=C["bg_panel"], fg=C["text_hi"]).pack()
+        tk.Label(centro, text="Atendente", font=("Georgia", 22, "bold"), bg=C["bg_panel"], fg=C["accent2"]).pack()
+        tk.Frame(centro, bg=C["accent2"], height=2, width=140).pack(pady=16)
+        for b in ["✅  Gerencie agendamentos", "✅  Controle a fila de espera",
+                  "✅  Cadastre pacientes", "✅  Consulte disponibilidade"]:
+            tk.Label(centro, text=b, font=("Helvetica", 11), bg=C["bg_panel"], fg=C["text_mid"]).pack(anchor="w", pady=3)
+        tk.Label(esq, text="© 2026 Sistema da Saúde VIP", font=("Helvetica", 9), bg=C["bg_panel"], fg=C["text_lo"]).pack(side=tk.BOTTOM, pady=12)
+
+        tk.Frame(raiz, bg=C["border"], width=1).pack(side=tk.LEFT, fill=tk.Y)
+
+        # ── Direito: formulário com scroll ─────────────────────
+        dir_ = tk.Frame(raiz, bg=C["bg_deep"], width=480)
+        dir_.pack(side=tk.RIGHT, fill=tk.BOTH)
+        dir_.pack_propagate(False)
+
+        sb = tk.Scrollbar(dir_, orient="vertical")
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        cv = tk.Canvas(dir_, bg=C["bg_deep"], highlightthickness=0, yscrollcommand=sb.set)
+        cv.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.config(command=cv.yview)
+        fc = tk.Frame(cv, bg=C["bg_deep"])
+        wid = cv.create_window((0, 0), window=fc, anchor="nw")
+        cv.bind("<Configure>", lambda e: cv.itemconfig(wid, width=e.width))
+        fc.bind("<Configure>", lambda e: cv.configure(scrollregion=cv.bbox("all")))
+        cv.bind("<MouseWheel>", lambda e: cv.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+
+        form = tk.Frame(fc, bg=C["bg_deep"])
+        form.pack(padx=50, pady=36, fill=tk.X)
+
+        tk.Label(form, text="Cadastro de Atendente", font=("Georgia", 22, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(anchor="w")
+        tk.Label(form, text="Preencha seus dados para criar o acesso.", font=("Helvetica", 10), bg=C["bg_deep"], fg=C["text_mid"]).pack(anchor="w", pady=(4, 20))
+
+        # Campos do formulário
+        rotulo(form, "NOME COMPLETO", C["bg_deep"])
+        self._cad_a_nome = campo(form, C["bg_deep"])
+
+        rotulo(form, "SETOR / UNIDADE", C["bg_deep"], top=12)
+        self._cad_a_setor = campo(form, C["bg_deep"], "Ex: Recepção, Especialidades…")
+
+        rotulo(form, "TURNO DE TRABALHO", C["bg_deep"], top=12)
+        self._cad_a_turno = campo(form, C["bg_deep"], "Ex: Manhã, Tarde, Noite…")
+
+        rotulo(form, "E-MAIL INSTITUCIONAL", C["bg_deep"], top=12)
+        self._cad_a_email = campo(form, C["bg_deep"], "atendente@saudevip.com")
+
+        rotulo(form, "TELEFONE / RAMAL", C["bg_deep"], top=12)
+        self._cad_a_tel = campo(form, C["bg_deep"], "(99) 99999-9999")
+
+        rotulo(form, "NOME DE USUÁRIO", C["bg_deep"], top=12)
+        self._cad_a_login = campo(form, C["bg_deep"])
+
+        rotulo(form, "SENHA (mín. 6 caracteres)", C["bg_deep"], top=12)
+        self._cad_a_senha = campo(form, C["bg_deep"], show="●")
+
+        rotulo(form, "CONFIRMAR SENHA", C["bg_deep"], top=12)
+        self._cad_a_conf = campo(form, C["bg_deep"], show="●")
+
+        # Label de status (erro/sucesso)
+        self._lbl_status_cad_a = tk.Label(form, text="", font=("Helvetica", 10),
+                                           bg=C["bg_deep"], fg=C["danger"], wraplength=340)
+        self._lbl_status_cad_a.pack(pady=(10, 0))
+
+        # Botão de cadastro com cor accent2 (azul = atendente)
+        b = tk.Button(form, text="  Criar Conta de Atendente  →", font=("Helvetica", 12, "bold"),
+                      bg=C["accent2_dim"], fg=C["white"], activebackground=C["accent2"],
+                      activeforeground=C["white"], cursor="hand2", relief=tk.FLAT, bd=0, pady=10,
+                      command=self._fazer_cadastro_atendente)
+        b.pack(fill=tk.X, pady=(12, 0))
+        b.bind("<Enter>", lambda _: b.config(bg=C["accent2"]))
+        b.bind("<Leave>", lambda _: b.config(bg=C["accent2_dim"]))
+
+        separador(form, pady=14)
+
+        # Link de volta ao login
+        row_link = tk.Frame(form, bg=C["bg_deep"])
+        row_link.pack()
+        tk.Label(row_link, text="Já tem conta? ", font=("Helvetica", 11), bg=C["bg_deep"], fg=C["text_mid"]).pack(side=tk.LEFT)
+        lk = tk.Label(row_link, text="Fazer login", font=("Helvetica", 11, "bold"), bg=C["bg_deep"], fg=C["accent2"], cursor="hand2")
+        lk.pack(side=tk.LEFT)
+        lk.bind("<Button-1>", lambda _: self._mostrar_login())
+        tk.Frame(form, height=20, bg=C["bg_deep"]).pack()
+
+    def _fazer_cadastro_atendente(self):
+        """
+        Valida e salva o novo atendente no DB.
+        Após sucesso, loga automaticamente no dashboard.
+        """
+        # Placeholders que devem ser ignorados na validação
+        PH = {"Ex: Recepção, Especialidades…", "Ex: Manhã, Tarde, Noite…",
+              "atendente@saudevip.com", "(99) 99999-9999"}
+
+        def g(e):
+            v = e.get().strip()
+            return "" if v in PH else v
+
+        nome  = g(self._cad_a_nome)
+        setor = g(self._cad_a_setor)
+        turno = g(self._cad_a_turno)
+        email = g(self._cad_a_email)
+        tel   = g(self._cad_a_tel)
+        login = g(self._cad_a_login)
+        senha = self._cad_a_senha.get()
+        conf  = self._cad_a_conf.get()
+
+        # Validações básicas
+        if not all([nome, setor, email, tel, login, senha, conf]):
+            self._lbl_status_cad_a.config(text="Preencha todos os campos obrigatórios.", fg=C["danger"])
+            return
+        if len(senha) < 6:
+            self._lbl_status_cad_a.config(text="Senha deve ter ao menos 6 caracteres.", fg=C["danger"])
+            return
+        if senha != conf:
+            self._lbl_status_cad_a.config(text="As senhas não coincidem.", fg=C["danger"])
+            return
+        if login in DB["usuarios"]:
+            self._lbl_status_cad_a.config(text=f"Usuário '{login}' já existe.", fg=C["danger"])
+            return
+
+        # Salva no banco em memória
+        DB["usuarios"][login] = {
+            "hash": hashlib.sha256(senha.encode()).hexdigest(),
+            "tipo": "atendente",
+            "nome": nome,
+            "setor": setor,
+            "turno": turno or "Não informado",
+            "email": email,
+            "telefone": tel,
+        }
+        self._lbl_status_cad_a.config(text=f"Conta criada! Bem-vindo(a), {nome.split()[0]}!", fg=C["success"])
+        self.root.after(1000, lambda: self._mostrar_dashboard_atendente(login))
+
+    # ══════════════════════════════════════════════════════════
+    #  DASHBOARD MÉDICO
+    #  Layout: Navbar no topo + Sidebar esquerda + Área principal
+    #  Páginas: home, pacientes, prontuários, agenda, config
+    # ══════════════════════════════════════════════════════════
+    def _mostrar_dashboard_medico(self, login):
+        self._limpar()
+        self.root.unbind("<Return>")
+        try:
+            self.root.state("zoomed")      # Windows
+        except:
+            self.root.attributes("-zoomed", True)  # Linux/Mac
+
+        u = DB["usuarios"][login]
+        # Estado do dashboard do médico
+        self._med_login = login
+        self._med_pagina = "home"
+        self._med_frames = {}  # guarda cada frame de página
+
+        raiz = tk.Frame(self.root, bg=C["bg_deep"])
+        raiz.pack(fill=tk.BOTH, expand=True)
+
+        # ── Navbar ────────────────────────────────────────────
+        nav = tk.Frame(raiz, bg=C["bg_panel"], height=60)
+        nav.pack(fill=tk.X)
+        nav.pack_propagate(False)
+        # Faixa colorida accent (verde) = identidade do médico
+        tk.Frame(nav, bg=C["accent"], width=4).pack(side=tk.LEFT, fill=tk.Y)
+        desenhar_logo(nav, C["bg_panel"], 0.5).pack(side=tk.LEFT, padx=(10, 6))
+        tk.Label(nav, text="Sistema da Saúde VIP", font=("Georgia", 16, "bold"), bg=C["bg_panel"], fg=C["text_hi"]).pack(side=tk.LEFT)
+        tk.Label(nav, text="  ·  Painel Médico", font=("Helvetica", 12), bg=C["bg_panel"], fg=C["accent"]).pack(side=tk.LEFT)
+        area_u = tk.Frame(nav, bg=C["bg_panel"])
+        area_u.pack(side=tk.RIGHT, padx=16)
+        tk.Label(area_u, text=f"🩺  {u['nome']}", font=("Helvetica", 11, "bold"), bg=C["bg_panel"], fg=C["text_mid"]).pack(side=tk.LEFT, padx=(0, 14))
+        tk.Label(area_u, text=u.get("crm", ""), font=("Helvetica", 9), bg=C["bg_panel"], fg=C["text_lo"]).pack(side=tk.LEFT, padx=(0, 16))
+        tk.Button(area_u, text=" Sair ", font=("Helvetica", 10, "bold"), bg=C["danger"], fg=C["white"],
+                  activebackground="#c03030", relief=tk.FLAT, bd=0, pady=5, cursor="hand2",
+                  command=self._mostrar_login).pack(side=tk.LEFT)
+
+        tk.Frame(raiz, bg=C["border"], height=1).pack(fill=tk.X)
+
+        corpo = tk.Frame(raiz, bg=C["bg_deep"])
+        corpo.pack(fill=tk.BOTH, expand=True)
+
+        # ── Sidebar ───────────────────────────────────────────
+        side = tk.Frame(corpo, bg=C["bg_panel"], width=220)
+        side.pack(side=tk.LEFT, fill=tk.Y)
+        side.pack_propagate(False)
+        tk.Label(side, text="MENU", font=("Helvetica", 9, "bold"), bg=C["bg_panel"], fg=C["text_lo"]).pack(anchor="w", padx=20, pady=(20, 6))
+
+        self._med_nav_btns = {}
+        itens = [("home", "🩺  Dashboard"), ("pacientes", "👥  Pacientes"),
+                 ("prontuarios", "📋  Prontuários"), ("agenda", "📅  Agenda"),
+                 ("config", "⚙️  Configurações")]
+        for chave, rot in itens:
+            b = tk.Button(side, text=rot, font=("Helvetica", 11), bg=C["bg_panel"], fg=C["text_mid"],
+                          activebackground=C["bg_card"], activeforeground=C["text_hi"],
+                          cursor="hand2", relief=tk.FLAT, bd=0, anchor="w", padx=20, pady=10,
+                          command=lambda c=chave: self._med_navegar(c))
+            b.pack(fill=tk.X)
+            self._med_nav_btns[chave] = b
+
+        tk.Label(side, text="© 2026 Saúde VIP", font=("Helvetica", 8), bg=C["bg_panel"], fg=C["text_lo"]).pack(side=tk.BOTTOM, pady=12)
+        tk.Frame(corpo, bg=C["border"], width=1).pack(side=tk.LEFT, fill=tk.Y)
+
+        # ── Área principal (container de páginas) ─────────────
+        self._med_container = tk.Frame(corpo, bg=C["bg_deep"])
+        self._med_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Constrói todas as páginas (ficam escondidas até navegar)
+        self._med_construir_home()
+        self._med_construir_pacientes()
+        self._med_construir_prontuarios()
+        self._med_construir_agenda()
+        self._med_construir_config()
+        self._med_navegar("home")
+
+    def _med_navegar(self, p):
+        """Troca a página visível no dashboard médico."""
+        if self._med_pagina in self._med_frames:
+            self._med_frames[self._med_pagina].pack_forget()
+        # Atualiza destaque visual na sidebar
+        for k, b in self._med_nav_btns.items():
+            b.config(bg=C["bg_card"] if k == p else C["bg_panel"],
+                     fg=C["accent"] if k == p else C["text_mid"])
+        self._med_pagina = p
+        self._med_frames[p].pack(fill=tk.BOTH, expand=True)
+
+    # ── Página HOME do médico ──────────────────────────────────
+    def _med_construir_home(self):
+        """Visão geral: saudação, 4 KPI cards e agenda do dia."""
+        f = tk.Frame(self._med_container, bg=C["bg_deep"])
+        self._med_frames["home"] = f
+        u = DB["usuarios"][self._med_login]
+        hora = time.localtime().tm_hour
+        saud = "Bom dia" if hora < 12 else ("Boa tarde" if hora < 18 else "Boa noite")
+
+        cont = tk.Frame(f, bg=C["bg_deep"])
+        cont.pack(fill=tk.BOTH, expand=True, padx=32, pady=24)
+
+        tk.Label(cont, text=f"{saud}, {u['nome']}  👋", font=("Georgia", 24, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(anchor="w")
+        tk.Label(cont, text=f"{u.get('especialidade', '')}  ·  {u.get('crm', '')}", font=("Helvetica", 11), bg=C["bg_deep"], fg=C["text_mid"]).pack(anchor="w", pady=(2, 24))
+
+        # KPI cards
+        metr = tk.Frame(cont, bg=C["bg_deep"])
+        metr.pack(fill=tk.X, pady=(0, 24))
+        for ic, tit, val, cor in [
+            ("📅", "Consultas hoje", "8", C["accent"]),
+            ("👥", "Pacientes ativos", str(len(DB["pacientes"])), C["success"]),
+            ("📋", "Prontuários", "124", C["accent2"]),
+            ("⚠️", "Exames pendentes", "3", C["warning"]),
+        ]:
+            card_info(metr, tit, val, ic, cor)
+
+        # Agenda do dia
+        sec = tk.Frame(cont, bg=C["bg_card"], highlightthickness=1, highlightbackground=C["border"])
+        sec.pack(fill=tk.BOTH, expand=True)
+        topo = tk.Frame(sec, bg=C["bg_card"])
+        topo.pack(fill=tk.X, padx=20, pady=(14, 0))
+        tk.Label(topo, text="Agenda de Hoje", font=("Georgia", 14, "bold"), bg=C["bg_card"], fg=C["text_hi"]).pack(side=tk.LEFT)
+        tk.Label(topo, text="14/04/2025", font=("Helvetica", 10), bg=C["bg_card"], fg=C["text_lo"]).pack(side=tk.RIGHT)
+        separador(sec, pady=0)
+        for cons in DB["consultas"][:4]:
+            cor_s = C["success"] if cons["status"] == "Confirmada" else C["warning"]
+            row = tk.Frame(sec, bg=C["bg_card"])
+            row.pack(fill=tk.X, padx=20, pady=8)
+            tk.Label(row, text=cons["hora"], font=("Courier", 13, "bold"), bg=C["bg_card"], fg=C["accent"], width=7).pack(side=tk.LEFT)
+            info = tk.Frame(row, bg=C["bg_card"])
+            info.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            tk.Label(info, text=cons["paciente"], font=("Helvetica", 12, "bold"), bg=C["bg_card"], fg=C["text_hi"]).pack(anchor="w")
+            tk.Label(info, text=f"{cons['tipo']}  ·  {cons['medico']}", font=("Helvetica", 9), bg=C["bg_card"], fg=C["text_mid"]).pack(anchor="w")
+            tk.Label(row, text=f"● {cons['status']}", font=("Helvetica", 10, "bold"), bg=C["bg_card"], fg=cor_s).pack(side=tk.RIGHT)
+            separador(sec, pady=0)
+        tk.Frame(sec, height=10, bg=C["bg_card"]).pack()
+
+    # ── Página PACIENTES do médico ─────────────────────────────
+    def _med_construir_pacientes(self):
+        """Lista todos os pacientes com resumo clínico e botão para prontuário."""
+        f = tk.Frame(self._med_container, bg=C["bg_deep"])
+        self._med_frames["pacientes"] = f
+
+        barra = tk.Frame(f, bg=C["bg_panel"], height=52)
+        barra.pack(fill=tk.X)
+        barra.pack_propagate(False)
+        tk.Button(barra, text="  + Novo Paciente", font=("Helvetica", 11, "bold"),
+                  bg=C["accent_dim"], fg=C["white"], activebackground=C["accent"],
+                  relief=tk.FLAT, bd=0, padx=14, pady=6, cursor="hand2",
+                  command=self._med_novo_paciente).pack(side=tk.LEFT, padx=16, pady=10)
+
+        cont = tk.Frame(f, bg=C["bg_deep"])
+        cont.pack(fill=tk.BOTH, expand=True, padx=28, pady=20)
+        tk.Label(cont, text="Gerenciamento de Pacientes", font=("Georgia", 18, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(anchor="w")
+        tk.Label(cont, text="Todos os pacientes cadastrados no sistema.", font=("Helvetica", 11), bg=C["bg_deep"], fg=C["text_mid"]).pack(anchor="w", pady=(2, 20))
+
+        for i, (pid, pac) in enumerate(DB["pacientes"].items()):
+            bg = C["bg_card"] if i % 2 == 0 else C["bg_deep"]
+            card = tk.Frame(cont, bg=bg, highlightthickness=1, highlightbackground=C["border"])
+            card.pack(fill=tk.X, pady=(0, 6))
+            inner = tk.Frame(card, bg=bg)
+            inner.pack(fill=tk.X, padx=16, pady=12)
+
+            # Avatar com inicial do nome
+            ini = pac["nome"][0].upper()
+            av = tk.Frame(inner, bg=C["accent2_dim"], width=42, height=42)
+            av.pack(side=tk.LEFT)
+            av.pack_propagate(False)
+            tk.Label(av, text=ini, font=("Helvetica", 15, "bold"), bg=C["accent2_dim"], fg=C["white"]).place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+
+            info = tk.Frame(inner, bg=bg)
+            info.pack(side=tk.LEFT, padx=(14, 0))
+            tk.Label(info, text=pac["nome"], font=("Helvetica", 12, "bold"), bg=bg, fg=C["text_hi"]).pack(anchor="w")
+            tk.Label(info, text=f"CPF: {pac.get('cpf', '—')}  ·  Plano: {pac.get('plano', 'Particular')}  ·  Sangue: {pac.get('tipo_sanguineo', '?')}",
+                     font=("Helvetica", 9), bg=bg, fg=C["text_mid"]).pack(anchor="w")
+            tk.Label(info, text=f"Alergias: {pac.get('alergias', 'Nenhuma')}",
+                     font=("Helvetica", 9), bg=bg,
+                     fg=C["warning"] if pac.get("alergias", "Nenhuma") != "Nenhuma" else C["text_lo"]).pack(anchor="w")
+
+            lado = tk.Frame(inner, bg=bg)
+            lado.pack(side=tk.RIGHT)
+            tk.Button(lado, text="Ver Prontuário", font=("Helvetica", 10), bg=C["bg_panel"], fg=C["accent"],
+                      activebackground=C["border"], relief=tk.FLAT, bd=0, padx=10, pady=4, cursor="hand2",
+                      command=lambda p=pid: self._med_ver_prontuario_paciente(p)).pack(anchor="e", pady=(6, 0))
+
+    def _med_novo_paciente(self):
+        """Popup simples para cadastrar um novo paciente (versão médico)."""
+        win = tk.Toplevel(self.root)
+        win.title("Cadastrar Novo Paciente")
+        win.configure(bg=C["bg_deep"])
+        win.geometry("480x540")
+        win.resizable(False, False)
+        win.grab_set()
+        tk.Label(win, text="Novo Paciente", font=("Georgia", 18, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(pady=18)
+        form = tk.Frame(win, bg=C["bg_deep"])
+        form.pack(padx=36, fill=tk.X)
+        entrs = {}
+        for cam, ph in [("Nome Completo", ""), ("CPF", "000.000.000-00"),
+                        ("Data Nascimento", "DD/MM/AAAA"), ("Telefone", "(99) 99999-9999"),
+                        ("Plano", "Unimed, Particular…"), ("Alergias", "Nenhuma")]:
+            rotulo(form, cam.upper(), C["bg_deep"], top=10)
+            entrs[cam] = campo(form, C["bg_deep"], ph)
+
+        def salvar():
+            nome = entrs["Nome Completo"].get().strip()
+            if not nome:
+                messagebox.showwarning("Atenção", "Nome obrigatório.", parent=win)
+                return
+            # Gera ID sequencial
+            novo_id = f"p{len(DB['pacientes']) + 1:03d}"
+            DB["pacientes"][novo_id] = {
+                "nome": nome,
+                "cpf": entrs["CPF"].get().strip(),
+                "nascimento": entrs["Data Nascimento"].get().strip(),
+                "email": "", "telefone": entrs["Telefone"].get().strip(),
+                "plano": entrs["Plano"].get().strip() or "Particular",
+                "tipo_sanguineo": "?", "alergias": entrs["Alergias"].get().strip() or "Nenhuma",
+                "medico_resp": DB["usuarios"][self._med_login]["nome"],
+            }
+            messagebox.showinfo("Sucesso", f"Paciente '{nome}' cadastrado!", parent=win)
+            win.destroy()
+
+        b = tk.Button(win, text="  Cadastrar  ", font=("Helvetica", 12, "bold"),
+                      bg=C["accent_dim"], fg=C["white"], activebackground=C["accent"],
+                      relief=tk.FLAT, bd=0, pady=10, command=salvar)
+        b.pack(pady=18)
+        b.bind("<Enter>", lambda _: b.config(bg=C["accent"]))
+        b.bind("<Leave>", lambda _: b.config(bg=C["accent_dim"]))
+
+    def _med_ver_prontuario_paciente(self, pid):
+        """
+        Janela popup com prontuários de um paciente específico.
+        Médico pode adicionar novos registros.
+        """
+        pac = DB["pacientes"].get(pid, {})
+        # Prontuários usam o pid como chave
+        prons = DB.setdefault("prontuarios", {}).setdefault(pid, [])
+
+        win = tk.Toplevel(self.root)
+        win.title(f"Prontuário — {pac.get('nome', '?')}")
+        win.configure(bg=C["bg_deep"])
+        win.geometry("640x600")
+        win.grab_set()
+
+        tk.Label(win, text=f"📋  {pac.get('nome', '?')}", font=("Georgia", 17, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(padx=24, pady=(18, 4), anchor="w")
+        tk.Label(win, text=f"CPF: {pac.get('cpf', '—')}  ·  Nascimento: {pac.get('nascimento', '—')}  ·  Sangue: {pac.get('tipo_sanguineo', '?')}  ·  Alergias: {pac.get('alergias', 'Nenhuma')}",
+                 font=("Helvetica", 10), bg=C["bg_deep"], fg=C["text_mid"]).pack(padx=24, anchor="w")
+
+        separador(win, pady=6)
+
+        sb = tk.Scrollbar(win, orient="vertical")
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        cv = tk.Canvas(win, bg=C["bg_deep"], highlightthickness=0, yscrollcommand=sb.set)
+        cv.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.config(command=cv.yview)
+        fc = tk.Frame(cv, bg=C["bg_deep"])
+        wid = cv.create_window((0, 0), window=fc, anchor="nw")
+        cv.bind("<Configure>", lambda e: cv.itemconfig(wid, width=e.width))
+        fc.bind("<Configure>", lambda e: cv.configure(scrollregion=cv.bbox("all")))
+
+        form = tk.Frame(fc, bg=C["bg_deep"])
+        form.pack(padx=24, pady=12, fill=tk.X)
+
+        if not prons:
+            tk.Label(form, text="Nenhum prontuário registrado.", font=("Helvetica", 12), bg=C["bg_deep"], fg=C["text_lo"]).pack(pady=20)
+        else:
+            for p in prons:
+                card = tk.Frame(form, bg=C["bg_card"], highlightthickness=1, highlightbackground=C["border"])
+                card.pack(fill=tk.X, pady=(0, 10))
+                inner = tk.Frame(card, bg=C["bg_card"])
+                inner.pack(fill=tk.X, padx=16, pady=12)
+                top = tk.Frame(inner, bg=C["bg_card"])
+                top.pack(fill=tk.X)
+                tk.Label(top, text=f"📅 {p['data']}", font=("Courier", 11, "bold"), bg=C["bg_card"], fg=C["accent"]).pack(side=tk.LEFT)
+                tk.Label(top, text=f"  {p['tipo']}  ·  {p['medico']}", font=("Helvetica", 10), bg=C["bg_card"], fg=C["text_mid"]).pack(side=tk.LEFT)
+                tk.Label(inner, text=f"Diagnóstico: {p['diagnostico']}", font=("Helvetica", 11), bg=C["bg_card"], fg=C["text_hi"], wraplength=550, justify=tk.LEFT).pack(anchor="w", pady=(8, 4))
+                tk.Label(inner, text=f"Prescrição: {p['prescricao']}", font=("Helvetica", 10), bg=C["bg_card"], fg=C["success"], wraplength=550).pack(anchor="w")
+                tk.Label(inner, text=f"Retorno: {p['retorno']}", font=("Helvetica", 10), bg=C["bg_card"], fg=C["warning"]).pack(anchor="w", pady=(4, 0))
+
+        # Botão para adicionar novo prontuário
+        def novo_pron():
+            w2 = tk.Toplevel(win)
+            w2.title("Novo Prontuário")
+            w2.configure(bg=C["bg_deep"])
+            w2.geometry("500x560")
+            w2.grab_set()
+            tk.Label(w2, text="Novo Prontuário", font=("Georgia", 16, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(pady=16)
+            f2 = tk.Frame(w2, bg=C["bg_deep"])
+            f2.pack(padx=32, fill=tk.X)
+            ents = {}
+            for cam, ph in [("Data", "DD/MM/AAAA"), ("Tipo", "Consulta / Exame / Retorno"),
+                             ("Prescrição", ""), ("Data Retorno", "DD/MM/AAAA")]:
+                rotulo(f2, cam.upper(), C["bg_deep"], top=10)
+                ents[cam] = campo(f2, C["bg_deep"], ph)
+            rotulo(f2, "DIAGNÓSTICO / OBSERVAÇÕES", C["bg_deep"], top=10)
+            txt = tk.Text(f2, height=4, font=("Helvetica", 11), bg=C["bg_card"], fg=C["text_hi"], relief=tk.FLAT, bd=8)
+            txt.pack(fill=tk.X, pady=(4, 0))
+
+            def salvar2():
+                data = ents["Data"].get().strip()
+                tipo = ents["Tipo"].get().strip()
+                diag = txt.get("1.0", tk.END).strip()
+                presc = ents["Prescrição"].get().strip()
+                ret = ents["Data Retorno"].get().strip()
+                if not all([data, tipo, diag]):
+                    messagebox.showwarning("Atenção", "Data, tipo e diagnóstico são obrigatórios.", parent=w2)
+                    return
+                u2 = DB["usuarios"][self._med_login]
+                DB["prontuarios"].setdefault(pid, []).insert(0, {
+                    "data": data, "medico": u2["nome"], "tipo": tipo,
+                    "diagnostico": diag, "prescricao": presc or "—", "retorno": ret or "—"
+                })
+                messagebox.showinfo("Sucesso", "Prontuário salvo!", parent=w2)
+                w2.destroy()
+                win.destroy()
+                self._med_ver_prontuario_paciente(pid)
+
+            b3 = tk.Button(w2, text="  Salvar  ", font=("Helvetica", 12, "bold"),
+                           bg=C["accent_dim"], fg=C["white"], activebackground=C["accent"],
+                           relief=tk.FLAT, bd=0, pady=10, command=salvar2)
+            b3.pack(pady=14)
+            b3.bind("<Enter>", lambda _: b3.config(bg=C["accent"]))
+            b3.bind("<Leave>", lambda _: b3.config(bg=C["accent_dim"]))
+
+        b2 = tk.Button(form, text="  + Adicionar Prontuário  ", font=("Helvetica", 11, "bold"),
+                       bg=C["accent_dim"], fg=C["white"], activebackground=C["accent"],
+                       relief=tk.FLAT, bd=0, pady=8, cursor="hand2", command=novo_pron)
+        b2.pack(pady=(8, 16))
+        b2.bind("<Enter>", lambda _: b2.config(bg=C["accent"]))
+        b2.bind("<Leave>", lambda _: b2.config(bg=C["accent_dim"]))
+
+    # ── Página PRONTUÁRIOS do médico ───────────────────────────
+    def _med_construir_prontuarios(self):
+        """Tabela com todos os prontuários de todos os pacientes."""
+        f = tk.Frame(self._med_container, bg=C["bg_deep"])
+        self._med_frames["prontuarios"] = f
+        cont = tk.Frame(f, bg=C["bg_deep"])
+        cont.pack(fill=tk.BOTH, expand=True, padx=28, pady=20)
+        tk.Label(cont, text="Todos os Prontuários", font=("Georgia", 18, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(anchor="w")
+        tk.Label(cont, text="Histórico clínico completo.", font=("Helvetica", 11), bg=C["bg_deep"], fg=C["text_mid"]).pack(anchor="w", pady=(2, 20))
+
+        # Monta lista flat: (nome_paciente, pid, prontuário)
+        todos = []
+        for pid, prons in DB.get("prontuarios", {}).items():
+            nome_p = DB["pacientes"].get(pid, {}).get("nome", "?")
+            for p in prons:
+                todos.append((nome_p, pid, p))
+
+        if not todos:
+            tk.Label(cont, text="Nenhum prontuário registrado ainda.", font=("Helvetica", 12), bg=C["bg_deep"], fg=C["text_lo"]).pack(pady=40)
+            return
+
+        # Cabeçalho da tabela
+        cab = tk.Frame(cont, bg=C["bg_panel"])
+        cab.pack(fill=tk.X)
+        for col, wd in [("Paciente", 22), ("Data", 12), ("Tipo", 14), ("Médico", 22), ("Ações", 8)]:
+            tk.Label(cab, text=col, font=("Helvetica", 9, "bold"), bg=C["bg_panel"], fg=C["text_lo"], anchor="w", width=wd).pack(side=tk.LEFT, padx=4, pady=8)
+        separador(cont, pady=0)
+
+        for i, (nome_p, pid, p) in enumerate(todos):
+            bg = C["bg_card"] if i % 2 == 0 else C["bg_deep"]
+            row = tk.Frame(cont, bg=bg)
+            row.pack(fill=tk.X)
+            for txt, wd in [(nome_p, 22), (p["data"], 12), (p["tipo"], 14), (p["medico"], 22)]:
+                tk.Label(row, text=txt, font=("Helvetica", 10), bg=bg, fg=C["text_mid"], anchor="w", width=wd).pack(side=tk.LEFT, padx=4, pady=8)
+            tk.Button(row, text="Ver", font=("Helvetica", 10), bg=C["bg_panel"], fg=C["accent"],
+                      activebackground=C["border"], relief=tk.FLAT, bd=0, padx=8, pady=3, cursor="hand2",
+                      command=lambda p2=pid: self._med_ver_prontuario_paciente(p2)).pack(side=tk.LEFT, padx=4)
+            separador(cont, pady=0)
+
+    # ── Página AGENDA do médico ────────────────────────────────
+    def _med_construir_agenda(self):
+        """Tabela com todos os agendamentos e botão para nova consulta."""
+        f = tk.Frame(self._med_container, bg=C["bg_deep"])
+        self._med_frames["agenda"] = f
+
+        barra = tk.Frame(f, bg=C["bg_panel"], height=52)
+        barra.pack(fill=tk.X)
+        barra.pack_propagate(False)
+        tk.Button(barra, text="  + Nova Consulta", font=("Helvetica", 11, "bold"),
+                  bg=C["accent_dim"], fg=C["white"], activebackground=C["accent"],
+                  relief=tk.FLAT, bd=0, padx=14, pady=6, cursor="hand2",
+                  command=self._med_nova_consulta).pack(side=tk.LEFT, padx=16, pady=10)
+
+        cont = tk.Frame(f, bg=C["bg_deep"])
+        cont.pack(fill=tk.BOTH, expand=True, padx=28, pady=20)
+        tk.Label(cont, text="Agenda de Consultas", font=("Georgia", 18, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(anchor="w")
+        tk.Label(cont, text="Gerencie todos os agendamentos.", font=("Helvetica", 11), bg=C["bg_deep"], fg=C["text_mid"]).pack(anchor="w", pady=(2, 20))
+
+        cab = tk.Frame(cont, bg=C["bg_panel"])
+        cab.pack(fill=tk.X)
+        for col, wd in [("Data", 10), ("Hora", 8), ("Paciente", 22), ("Médico", 22), ("Tipo", 14), ("Status", 14)]:
+            tk.Label(cab, text=col, font=("Helvetica", 9, "bold"), bg=C["bg_panel"], fg=C["text_lo"], anchor="w", width=wd).pack(side=tk.LEFT, padx=4, pady=8)
+        separador(cont, pady=0)
+
+        for i, c in enumerate(DB["consultas"]):
+            bg = C["bg_card"] if i % 2 == 0 else C["bg_deep"]
+            row = tk.Frame(cont, bg=bg)
+            row.pack(fill=tk.X)
+            cor_s = C["success"] if c["status"] == "Confirmada" else C["warning"]
+            for txt, wd in [(c["data"], 10), (c["hora"], 8), (c["paciente"], 22), (c["medico"], 22), (c["tipo"], 14)]:
+                tk.Label(row, text=txt, font=("Helvetica", 10), bg=bg, fg=C["text_mid"], anchor="w", width=wd).pack(side=tk.LEFT, padx=4, pady=8)
+            tk.Label(row, text=f"● {c['status']}", font=("Helvetica", 10, "bold"), bg=bg, fg=cor_s, anchor="w", width=14).pack(side=tk.LEFT, padx=4)
+            separador(cont, pady=0)
+
+    def _med_nova_consulta(self):
+        """Popup para agendar nova consulta (versão médico)."""
+        win = tk.Toplevel(self.root)
+        win.title("Nova Consulta")
+        win.configure(bg=C["bg_deep"])
+        win.geometry("480x440")
+        win.resizable(False, False)
+        win.grab_set()
+        tk.Label(win, text="Agendar Consulta", font=("Georgia", 17, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(pady=16)
+        form = tk.Frame(win, bg=C["bg_deep"])
+        form.pack(padx=36, fill=tk.X)
+        ents = {}
+        for cam, ph in [("Paciente", "Nome do paciente"), ("Data", "DD/MM/AAAA"),
+                        ("Hora", "HH:MM"), ("Tipo", "Consulta / Retorno / Exame")]:
+            rotulo(form, cam.upper(), C["bg_deep"], top=10)
+            ents[cam] = campo(form, C["bg_deep"], ph)
+
+        def salvar():
+            pac = ents["Paciente"].get().strip()
+            if not pac:
+                messagebox.showwarning("Atenção", "Informe o paciente.", parent=win)
+                return
+            DB["consultas"].append({
+                "data": ents["Data"].get().strip(),
+                "hora": ents["Hora"].get().strip(),
+                "paciente": pac,
+                "medico": DB["usuarios"][self._med_login]["nome"],
+                "status": "Aguardando",
+                "tipo": ents["Tipo"].get().strip() or "Consulta",
+                "convenio": "—",
+            })
+            messagebox.showinfo("Sucesso", "Consulta agendada!", parent=win)
+            win.destroy()
+
+        b = tk.Button(win, text="  Agendar  ", font=("Helvetica", 12, "bold"),
+                      bg=C["accent_dim"], fg=C["white"], activebackground=C["accent"],
+                      relief=tk.FLAT, bd=0, pady=10, command=salvar)
+        b.pack(pady=16)
+        b.bind("<Enter>", lambda _: b.config(bg=C["accent"]))
+        b.bind("<Leave>", lambda _: b.config(bg=C["accent_dim"]))
+
+    # ── Página CONFIGURAÇÕES do médico ─────────────────────────
+    def _med_construir_config(self):
+        """Dados do médico + toggles de notificações e segurança."""
+        f = tk.Frame(self._med_container, bg=C["bg_deep"])
+        self._med_frames["config"] = f
+        cont = tk.Frame(f, bg=C["bg_deep"])
+        cont.pack(fill=tk.BOTH, expand=True, padx=40, pady=28)
+        tk.Label(cont, text="Configurações", font=("Georgia", 20, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(anchor="w")
+        tk.Label(cont, text="Personalize seu painel.", font=("Helvetica", 12), bg=C["bg_deep"], fg=C["text_mid"]).pack(anchor="w", pady=(0, 24))
+
+        u = DB["usuarios"][self._med_login]
+        card = tk.Frame(cont, bg=C["bg_card"], highlightthickness=1, highlightbackground=C["border"])
+        card.pack(fill=tk.X, pady=(0, 16))
+        tk.Label(card, text="Dados do Médico", font=("Helvetica", 12, "bold"), bg=C["bg_card"], fg=C["text_hi"]).pack(anchor="w", padx=20, pady=(14, 8))
+        separador(card, pady=0)
+        for campo_k, label_k in [("nome", "Nome"), ("crm", "CRM"), ("especialidade", "Especialidade"),
+                                   ("email", "E-mail"), ("telefone", "Telefone")]:
+            row = tk.Frame(card, bg=C["bg_card"])
+            row.pack(fill=tk.X, padx=20, pady=8)
+            tk.Label(row, text=label_k, font=("Helvetica", 11), bg=C["bg_card"], fg=C["text_mid"], width=16, anchor="w").pack(side=tk.LEFT)
+            tk.Label(row, text=u.get(campo_k, "—"), font=("Helvetica", 11, "bold"), bg=C["bg_card"], fg=C["text_hi"]).pack(side=tk.LEFT)
+            separador(card, pady=0)
+        tk.Frame(card, height=8, bg=C["bg_card"]).pack()
+
+        # Função auxiliar para seções de toggle
+        def _secao_tog(titulo, *ops):
+            c2 = tk.Frame(cont, bg=C["bg_card"], highlightthickness=1, highlightbackground=C["border"])
+            c2.pack(fill=tk.X, pady=(0, 14))
+            tk.Label(c2, text=titulo, font=("Helvetica", 12, "bold"), bg=C["bg_card"], fg=C["text_hi"]).pack(anchor="w", padx=20, pady=(14, 6))
+            separador(c2, pady=0)
+            for op, ini in ops:
+                row = tk.Frame(c2, bg=C["bg_card"])
+                row.pack(fill=tk.X, padx=20, pady=8)
+                tk.Label(row, text=op, font=("Helvetica", 11), bg=C["bg_card"], fg=C["text_mid"]).pack(side=tk.LEFT)
+                var = tk.BooleanVar(value=ini)
+                lbl = tk.Label(row, text="Ativo" if ini else "Inativo", font=("Helvetica", 10, "bold"),
+                               bg=C["bg_card"], fg=C["success"] if ini else C["text_lo"])
+                lbl.pack(side=tk.RIGHT, padx=(0, 10))
+                def _tog(v=var, l=lbl):
+                    v.set(not v.get())
+                    l.config(text="Ativo" if v.get() else "Inativo", fg=C["success"] if v.get() else C["text_lo"])
+                tk.Button(row, text="Alternar", font=("Helvetica", 9), bg=C["bg_panel"], fg=C["text_mid"],
+                          activebackground=C["border"], relief=tk.FLAT, bd=0, padx=10, pady=3, cursor="hand2", command=_tog).pack(side=tk.RIGHT)
+                separador(c2, pady=0)
+            tk.Frame(c2, height=6, bg=C["bg_card"]).pack()
+
+        _secao_tog("🔔  Notificações", ("Alertas de consultas agendadas", True), ("Avisos por e-mail", True), ("Resumo diário", False))
+        _secao_tog("🔒  Segurança", ("Autenticação em duas etapas", False), ("Log de acessos", True))
+
+        b = tk.Button(cont, text="  💾  Salvar Configurações", font=("Helvetica", 12, "bold"),
+                      bg=C["accent_dim"], fg=C["white"], activebackground=C["accent"],
+                      relief=tk.FLAT, bd=0, padx=20, pady=10, cursor="hand2",
+                      command=lambda: messagebox.showinfo("OK", "Configurações salvas! ✅", parent=self.root))
+        b.pack(anchor="w", pady=(4, 0))
+        b.bind("<Enter>", lambda _: b.config(bg=C["accent"]))
+        b.bind("<Leave>", lambda _: b.config(bg=C["accent_dim"]))
+
+    # ══════════════════════════════════════════════════════════
+    #  DASHBOARD DO ATENDENTE
+    #  Identidade visual: accent2 (azul) para diferenciar do médico
+    #  Páginas: home, agenda, fila, pacientes, config
+    # ══════════════════════════════════════════════════════════
+    def _mostrar_dashboard_atendente(self, login):
+        self._limpar()
+        self.root.unbind("<Return>")
+        try:
+            self.root.state("zoomed")
+        except:
+            self.root.attributes("-zoomed", True)
+
+        u = DB["usuarios"][login]
+        # Estado do dashboard do atendente
+        self._at_login = login
+        self._at_pagina = "home"
+        self._at_frames = {}  # dicionário com cada frame de página
+
+        raiz = tk.Frame(self.root, bg=C["bg_deep"])
+        raiz.pack(fill=tk.BOTH, expand=True)
+
+        # ── Navbar (azul = atendente) ──────────────────────────
+        nav = tk.Frame(raiz, bg=C["bg_panel"], height=60)
+        nav.pack(fill=tk.X)
+        nav.pack_propagate(False)
+        # Faixa accent2 (azul) identifica o perfil de atendente
+        tk.Frame(nav, bg=C["accent2"], width=4).pack(side=tk.LEFT, fill=tk.Y)
+        desenhar_logo(nav, C["bg_panel"], 0.5).pack(side=tk.LEFT, padx=(10, 6))
+        tk.Label(nav, text="Sistema da Saúde VIP", font=("Georgia", 16, "bold"), bg=C["bg_panel"], fg=C["text_hi"]).pack(side=tk.LEFT)
+        tk.Label(nav, text="  ·  Painel do Atendente", font=("Helvetica", 12), bg=C["bg_panel"], fg=C["accent2"]).pack(side=tk.LEFT)
+
+        area_u = tk.Frame(nav, bg=C["bg_panel"])
+        area_u.pack(side=tk.RIGHT, padx=16)
+        tk.Label(area_u, text=f"🖥️  {u['nome']}", font=("Helvetica", 11, "bold"), bg=C["bg_panel"], fg=C["text_mid"]).pack(side=tk.LEFT, padx=(0, 14))
+        tk.Label(area_u, text=u.get("setor", ""), font=("Helvetica", 9), bg=C["bg_panel"], fg=C["text_lo"]).pack(side=tk.LEFT, padx=(0, 16))
+        tk.Button(area_u, text=" Sair ", font=("Helvetica", 10, "bold"), bg=C["danger"], fg=C["white"],
+                  activebackground="#c03030", relief=tk.FLAT, bd=0, pady=5, cursor="hand2",
+                  command=self._mostrar_login).pack(side=tk.LEFT)
+
+        tk.Frame(raiz, bg=C["border"], height=1).pack(fill=tk.X)
+
+        corpo = tk.Frame(raiz, bg=C["bg_deep"])
+        corpo.pack(fill=tk.BOTH, expand=True)
+
+        # ── Sidebar do atendente ───────────────────────────────
+        side = tk.Frame(corpo, bg=C["bg_panel"], width=220)
+        side.pack(side=tk.LEFT, fill=tk.Y)
+        side.pack_propagate(False)
+        tk.Label(side, text="MENU", font=("Helvetica", 9, "bold"), bg=C["bg_panel"], fg=C["text_lo"]).pack(anchor="w", padx=20, pady=(20, 6))
+
+        self._at_nav_btns = {}
+        itens = [
+            ("home",      "🖥️  Dashboard"),
+            ("agenda",    "📅  Agendamentos"),
+            ("fila",      "🔢  Fila de Espera"),
+            ("pacientes", "👤  Pacientes"),
+            ("config",    "⚙️  Configurações"),
+        ]
+        for chave, rot in itens:
+            b = tk.Button(side, text=rot, font=("Helvetica", 11), bg=C["bg_panel"], fg=C["text_mid"],
+                          activebackground=C["bg_card"], activeforeground=C["text_hi"],
+                          cursor="hand2", relief=tk.FLAT, bd=0, anchor="w", padx=20, pady=10,
+                          command=lambda c=chave: self._at_navegar(c))
+            b.pack(fill=tk.X)
+            self._at_nav_btns[chave] = b
+
+        tk.Label(side, text="© 2026 Saúde VIP", font=("Helvetica", 8), bg=C["bg_panel"], fg=C["text_lo"]).pack(side=tk.BOTTOM, pady=12)
+        tk.Frame(corpo, bg=C["border"], width=1).pack(side=tk.LEFT, fill=tk.Y)
+
+        # ── Área principal ─────────────────────────────────────
+        self._at_container = tk.Frame(corpo, bg=C["bg_deep"])
+        self._at_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Constrói todas as páginas
+        self._at_construir_home()
+        self._at_construir_agenda()
+        self._at_construir_fila()
+        self._at_construir_pacientes()
+        self._at_construir_config()
+        self._at_navegar("home")
+
+    def _at_navegar(self, p):
+        """Troca a página visível no dashboard do atendente."""
+        if self._at_pagina in self._at_frames:
+            self._at_frames[self._at_pagina].pack_forget()
+        # Destaque em accent2 (azul) para o item ativo
+        for k, b in self._at_nav_btns.items():
+            b.config(bg=C["bg_card"] if k == p else C["bg_panel"],
+                     fg=C["accent2"] if k == p else C["text_mid"])
+        self._at_pagina = p
+        self._at_frames[p].pack(fill=tk.BOTH, expand=True)
+
+    # ── Página HOME do atendente ───────────────────────────────
+    def _at_construir_home(self):
+        """
+        Visão geral do atendente:
+        - Saudação personalizada
+        - 4 KPI cards (consultas hoje, pacientes, fila, convênios)
+        - Próximas consultas do dia
+        - Fila de espera resumida
+        """
+        f = tk.Frame(self._at_container, bg=C["bg_deep"])
+        self._at_frames["home"] = f
+        u = DB["usuarios"][self._at_login]
+        hora = time.localtime().tm_hour
+        saud = "Bom dia" if hora < 12 else ("Boa tarde" if hora < 18 else "Boa noite")
+
+        cont = tk.Frame(f, bg=C["bg_deep"])
+        cont.pack(fill=tk.BOTH, expand=True, padx=32, pady=24)
+
+        tk.Label(cont, text=f"{saud}, {u['nome'].split()[0]}!  🖥️", font=("Georgia", 24, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(anchor="w")
+        tk.Label(cont, text=f"{u.get('setor', 'Recepção')}  ·  Turno: {u.get('turno', '—')}",
+                 font=("Helvetica", 11), bg=C["bg_deep"], fg=C["text_mid"]).pack(anchor="w", pady=(2, 24))
+
+        # KPI cards
+        metr = tk.Frame(cont, bg=C["bg_deep"])
+        metr.pack(fill=tk.X, pady=(0, 20))
+        aguardando = len([x for x in DB["fila"] if x["status"] == "Aguardando"])
+        card_info(metr, "Consultas hoje",    str(len(DB["consultas"])),      "📅", C["accent2"])
+        card_info(metr, "Pacientes cad.",    str(len(DB["pacientes"])),      "👤", C["accent"])
+        card_info(metr, "Na fila agora",     str(aguardando),                "🔢", C["orange"])
+        card_info(metr, "Confirmadas",       str(len([c for c in DB["consultas"] if c["status"] == "Confirmada"])), "✅", C["success"])
+
+        # Layout 2 colunas
+        row2 = tk.Frame(cont, bg=C["bg_deep"])
+        row2.pack(fill=tk.BOTH, expand=True)
+
+        # ── Coluna esquerda: próximas consultas do dia ─────────
+        card_ag = tk.Frame(row2, bg=C["bg_card"], highlightthickness=1, highlightbackground=C["border"])
+        card_ag.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 12))
+        tk.Label(card_ag, text="📅  Agenda de Hoje", font=("Georgia", 13, "bold"), bg=C["bg_card"], fg=C["text_hi"]).pack(anchor="w", padx=18, pady=(14, 6))
+        separador(card_ag, pady=0)
+        for c in DB["consultas"][:3]:
+            cor_s = C["success"] if c["status"] == "Confirmada" else C["warning"]
+            row = tk.Frame(card_ag, bg=C["bg_card"])
+            row.pack(fill=tk.X, padx=16, pady=7)
+            tk.Label(row, text=c["hora"], font=("Courier", 12, "bold"), bg=C["bg_card"], fg=C["accent2"], width=6).pack(side=tk.LEFT)
+            mid = tk.Frame(row, bg=C["bg_card"])
+            mid.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            tk.Label(mid, text=c["paciente"], font=("Helvetica", 11, "bold"), bg=C["bg_card"], fg=C["text_hi"]).pack(anchor="w")
+            tk.Label(mid, text=f"{c['tipo']}  ·  {c['convenio']}", font=("Helvetica", 9), bg=C["bg_card"], fg=C["text_mid"]).pack(anchor="w")
+            tk.Label(row, text=f"● {c['status']}", font=("Helvetica", 9, "bold"), bg=C["bg_card"], fg=cor_s).pack(side=tk.RIGHT)
+            separador(card_ag, pady=0)
+        tk.Frame(card_ag, height=8, bg=C["bg_card"]).pack()
+
+        # ── Coluna direita: fila de espera ─────────────────────
+        card_fila = tk.Frame(row2, bg=C["bg_card"], highlightthickness=1, highlightbackground=C["border"])
+        card_fila.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tk.Label(card_fila, text="🔢  Fila de Espera", font=("Georgia", 13, "bold"), bg=C["bg_card"], fg=C["text_hi"]).pack(anchor="w", padx=18, pady=(14, 6))
+        separador(card_fila, pady=0)
+        for item in DB["fila"]:
+            cor_f = C["success"] if item["status"] == "Em atendimento" else C["warning"]
+            row = tk.Frame(card_fila, bg=C["bg_card"])
+            row.pack(fill=tk.X, padx=16, pady=7)
+            # Badge com número de senha
+            badge = tk.Frame(row, bg=C["orange"] if item["status"] == "Aguardando" else C["success"], width=44)
+            badge.pack(side=tk.LEFT)
+            badge.pack_propagate(False)
+            tk.Label(badge, text=item["senha"], font=("Courier", 10, "bold"), bg=badge.cget("bg"), fg=C["white"]).pack(pady=6)
+            mid = tk.Frame(row, bg=C["bg_card"])
+            mid.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
+            tk.Label(mid, text=item["nome"], font=("Helvetica", 11, "bold"), bg=C["bg_card"], fg=C["text_hi"]).pack(anchor="w")
+            tk.Label(mid, text=f"{item['tipo']}  ·  chegada {item['chegada']}", font=("Helvetica", 9), bg=C["bg_card"], fg=C["text_mid"]).pack(anchor="w")
+            tk.Label(row, text=item["status"], font=("Helvetica", 9, "bold"), bg=C["bg_card"], fg=cor_f).pack(side=tk.RIGHT)
+            separador(card_fila, pady=0)
+        tk.Frame(card_fila, height=8, bg=C["bg_card"]).pack()
+
+    # ── Página AGENDA do atendente ─────────────────────────────
+    def _at_construir_agenda(self):
+        """
+        Gerenciamento completo de agendamentos.
+        Mostra tabela com data, hora, paciente, médico, convênio e status.
+        Atendente pode agendar, confirmar ou cancelar consultas.
+        """
+        f = tk.Frame(self._at_container, bg=C["bg_deep"])
+        self._at_frames["agenda"] = f
+
+        # Barra de ações
+        barra = tk.Frame(f, bg=C["bg_panel"], height=52)
+        barra.pack(fill=tk.X)
+        barra.pack_propagate(False)
+        tk.Button(barra, text="  + Agendar Consulta", font=("Helvetica", 11, "bold"),
+                  bg=C["accent2_dim"], fg=C["white"], activebackground=C["accent2"],
+                  relief=tk.FLAT, bd=0, padx=14, pady=6, cursor="hand2",
+                  command=self._at_nova_consulta).pack(side=tk.LEFT, padx=16, pady=10)
+        tk.Button(barra, text="  ↻  Atualizar", font=("Helvetica", 10),
+                  bg=C["bg_card"], fg=C["text_mid"], activebackground=C["border"],
+                  relief=tk.FLAT, bd=0, padx=12, pady=6, cursor="hand2",
+                  command=lambda: [self._at_frames["agenda"].destroy(),
+                                   self._at_construir_agenda.__func__(self),
+                                   self._at_navegar("agenda")]
+                  ).pack(side=tk.LEFT, pady=10)
+
+        cont = tk.Frame(f, bg=C["bg_deep"])
+        cont.pack(fill=tk.BOTH, expand=True, padx=28, pady=20)
+        tk.Label(cont, text="Agendamentos", font=("Georgia", 18, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(anchor="w")
+        tk.Label(cont, text="Gerencie e confirme todas as consultas agendadas.", font=("Helvetica", 11), bg=C["bg_deep"], fg=C["text_mid"]).pack(anchor="w", pady=(2, 20))
+
+        # Cabeçalho da tabela
+        cab = tk.Frame(cont, bg=C["bg_panel"])
+        cab.pack(fill=tk.X)
+        for col, wd in [("Data", 10), ("Hora", 7), ("Paciente", 20), ("Médico", 20), ("Convênio", 16), ("Status", 12), ("Ações", 16)]:
+            tk.Label(cab, text=col, font=("Helvetica", 9, "bold"), bg=C["bg_panel"], fg=C["text_lo"], anchor="w", width=wd).pack(side=tk.LEFT, padx=4, pady=8)
+        separador(cont, pady=0)
+
+        for i, c in enumerate(DB["consultas"]):
+            bg = C["bg_card"] if i % 2 == 0 else C["bg_deep"]
+            row = tk.Frame(cont, bg=bg)
+            row.pack(fill=tk.X)
+            cor_s = C["success"] if c["status"] == "Confirmada" else C["warning"] if c["status"] == "Aguardando" else C["danger"]
+
+            for txt, wd in [(c["data"], 10), (c["hora"], 7), (c["paciente"], 20), (c["medico"], 20), (c.get("convenio", "—"), 16)]:
+                tk.Label(row, text=txt, font=("Helvetica", 10), bg=bg, fg=C["text_mid"], anchor="w", width=wd).pack(side=tk.LEFT, padx=4, pady=8)
+            tk.Label(row, text=f"● {c['status']}", font=("Helvetica", 9, "bold"), bg=bg, fg=cor_s, anchor="w", width=12).pack(side=tk.LEFT, padx=4)
+
+            # Botões de ação inline
+            acoes = tk.Frame(row, bg=bg)
+            acoes.pack(side=tk.LEFT, padx=4)
+            if c["status"] != "Confirmada":
+                def confirmar(cons=c):
+                    cons["status"] = "Confirmada"
+                    # Reconstrói a página para atualizar
+                    self._at_frames["agenda"].destroy()
+                    del self._at_frames["agenda"]
+                    self._at_construir_agenda()
+                    self._at_navegar("agenda")
+                tk.Button(acoes, text="✓", font=("Helvetica", 10, "bold"), bg=C["success"], fg=C["white"],
+                          activebackground=C["accent"], relief=tk.FLAT, bd=0, padx=6, pady=2, cursor="hand2",
+                          command=confirmar).pack(side=tk.LEFT, padx=(0, 4))
+            def cancelar(cons=c):
+                cons["status"] = "Cancelada"
+                self._at_frames["agenda"].destroy()
+                del self._at_frames["agenda"]
+                self._at_construir_agenda()
+                self._at_navegar("agenda")
+            tk.Button(acoes, text="✗", font=("Helvetica", 10, "bold"), bg=C["danger"], fg=C["white"],
+                      activebackground="#c03030", relief=tk.FLAT, bd=0, padx=6, pady=2, cursor="hand2",
+                      command=cancelar).pack(side=tk.LEFT)
+            separador(cont, pady=0)
+
+    def _at_nova_consulta(self):
+        """
+        Popup para o atendente agendar uma nova consulta.
+        Inclui campo de convênio, diferente da versão do médico.
+        """
+        win = tk.Toplevel(self.root)
+        win.title("Agendar Consulta")
+        win.configure(bg=C["bg_deep"])
+        win.geometry("480x520")
+        win.resizable(False, False)
+        win.grab_set()
+        tk.Label(win, text="Nova Consulta", font=("Georgia", 17, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(pady=16)
+        form = tk.Frame(win, bg=C["bg_deep"])
+        form.pack(padx=36, fill=tk.X)
+        ents = {}
+        for cam, ph in [("Paciente", "Nome completo do paciente"),
+                        ("Médico", "Dr./Dra. Nome"), ("Data", "DD/MM/AAAA"),
+                        ("Hora", "HH:MM"), ("Tipo", "Consulta / Retorno / Exame"),
+                        ("Convênio", "Unimed, Particular…")]:
+            rotulo(form, cam.upper(), C["bg_deep"], top=10)
+            ents[cam] = campo(form, C["bg_deep"], ph)
+
+        def salvar():
+            pac = ents["Paciente"].get().strip()
+            med = ents["Médico"].get().strip()
+            if not pac or not med:
+                messagebox.showwarning("Atenção", "Paciente e médico são obrigatórios.", parent=win)
+                return
+            DB["consultas"].append({
+                "data":     ents["Data"].get().strip(),
+                "hora":     ents["Hora"].get().strip(),
+                "paciente": pac,
+                "medico":   med,
+                "status":   "Aguardando",
+                "tipo":     ents["Tipo"].get().strip() or "Consulta",
+                "convenio": ents["Convênio"].get().strip() or "Particular",
+            })
+            messagebox.showinfo("Sucesso", "Consulta agendada com sucesso!", parent=win)
+            win.destroy()
+
+        b = tk.Button(win, text="  Agendar  →", font=("Helvetica", 12, "bold"),
+                      bg=C["accent2_dim"], fg=C["white"], activebackground=C["accent2"],
+                      relief=tk.FLAT, bd=0, pady=10, command=salvar)
+        b.pack(fill=tk.X, padx=36, pady=16)
+        b.bind("<Enter>", lambda _: b.config(bg=C["accent2"]))
+        b.bind("<Leave>", lambda _: b.config(bg=C["accent2_dim"]))
+
+    # ── Página FILA DE ESPERA do atendente ─────────────────────
+    def _at_construir_fila(self):
+        """
+        Controle da fila de espera:
+        - Exibe senha, nome, tipo de atendimento e status
+        - Atendente pode chamar próximo, registrar chegada ou remover da fila
+        """
+        f = tk.Frame(self._at_container, bg=C["bg_deep"])
+        self._at_frames["fila"] = f
+
+        # Barra de ações da fila
+        barra = tk.Frame(f, bg=C["bg_panel"], height=52)
+        barra.pack(fill=tk.X)
+        barra.pack_propagate(False)
+        tk.Button(barra, text="  + Registrar Chegada", font=("Helvetica", 11, "bold"),
+                  bg=C["accent2_dim"], fg=C["white"], activebackground=C["accent2"],
+                  relief=tk.FLAT, bd=0, padx=14, pady=6, cursor="hand2",
+                  command=self._at_registrar_chegada).pack(side=tk.LEFT, padx=16, pady=10)
+        tk.Button(barra, text="  ▶  Chamar Próximo", font=("Helvetica", 11, "bold"),
+                  bg=C["accent_dim"], fg=C["white"], activebackground=C["accent"],
+                  relief=tk.FLAT, bd=0, padx=14, pady=6, cursor="hand2",
+                  command=self._at_chamar_proximo).pack(side=tk.LEFT, pady=10)
+
+        cont = tk.Frame(f, bg=C["bg_deep"])
+        cont.pack(fill=tk.BOTH, expand=True, padx=28, pady=20)
+        tk.Label(cont, text="Fila de Espera", font=("Georgia", 18, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(anchor="w")
+        tk.Label(cont, text="Controle quem está aguardando atendimento.", font=("Helvetica", 11), bg=C["bg_deep"], fg=C["text_mid"]).pack(anchor="w", pady=(2, 20))
+
+        # Contadores de status
+        totais = tk.Frame(cont, bg=C["bg_deep"])
+        totais.pack(fill=tk.X, pady=(0, 16))
+        ag = len([x for x in DB["fila"] if x["status"] == "Aguardando"])
+        em = len([x for x in DB["fila"] if x["status"] == "Em atendimento"])
+        card_info(totais, "Aguardando",       str(ag), "⏳", C["orange"])
+        card_info(totais, "Em atendimento",   str(em), "🩺", C["success"])
+        card_info(totais, "Total na fila",    str(len(DB["fila"])), "🔢", C["accent2"])
+
+        separador(cont, pady=8)
+
+        # Cabeçalho da fila
+        cab = tk.Frame(cont, bg=C["bg_panel"])
+        cab.pack(fill=tk.X)
+        for col, wd in [("Senha", 8), ("Nome", 22), ("Tipo", 14), ("Médico", 20), ("Chegada", 10), ("Status", 16), ("Ações", 12)]:
+            tk.Label(cab, text=col, font=("Helvetica", 9, "bold"), bg=C["bg_panel"], fg=C["text_lo"], anchor="w", width=wd).pack(side=tk.LEFT, padx=4, pady=8)
+        separador(cont, pady=0)
+
+        for i, item in enumerate(DB["fila"]):
+            bg = C["bg_card"] if i % 2 == 0 else C["bg_deep"]
+            row = tk.Frame(cont, bg=bg)
+            row.pack(fill=tk.X)
+            cor_s = C["success"] if item["status"] == "Em atendimento" else C["orange"]
+
+            # Badge de senha colorido
+            badge_bg = C["orange"] if item["status"] == "Aguardando" else C["success"]
+            badge = tk.Frame(row, bg=badge_bg, width=60)
+            badge.pack(side=tk.LEFT, padx=4, pady=6)
+            badge.pack_propagate(False)
+            tk.Label(badge, text=item["senha"], font=("Courier", 10, "bold"), bg=badge_bg, fg=C["white"]).pack(pady=4, padx=4)
+
+            for txt, wd in [(item["nome"], 22), (item["tipo"], 14), (item["medico"], 20), (item["chegada"], 10)]:
+                tk.Label(row, text=txt, font=("Helvetica", 10), bg=bg, fg=C["text_mid"], anchor="w", width=wd).pack(side=tk.LEFT, padx=4, pady=8)
+            tk.Label(row, text=f"● {item['status']}", font=("Helvetica", 9, "bold"), bg=bg, fg=cor_s, anchor="w", width=16).pack(side=tk.LEFT, padx=4)
+
+            # Botão para remover da fila
+            def remover(it=item):
+                DB["fila"].remove(it)
+                self._at_frames["fila"].destroy()
+                del self._at_frames["fila"]
+                self._at_construir_fila()
+                self._at_navegar("fila")
+            tk.Button(row, text="Remover", font=("Helvetica", 9), bg=C["danger"], fg=C["white"],
+                      activebackground="#c03030", relief=tk.FLAT, bd=0, padx=8, pady=3, cursor="hand2",
+                      command=remover).pack(side=tk.LEFT, padx=4)
+            separador(cont, pady=0)
+
+    def _at_registrar_chegada(self):
+        """
+        Popup para registrar chegada de um paciente.
+        Gera senha automática incremental (A001, A002…).
+        """
+        win = tk.Toplevel(self.root)
+        win.title("Registrar Chegada")
+        win.configure(bg=C["bg_deep"])
+        win.geometry("480x440")
+        win.resizable(False, False)
+        win.grab_set()
+        tk.Label(win, text="Registrar Chegada", font=("Georgia", 17, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(pady=16)
+        form = tk.Frame(win, bg=C["bg_deep"])
+        form.pack(padx=36, fill=tk.X)
+        ents = {}
+        for cam, ph in [("Nome do Paciente", "Nome completo"),
+                        ("Tipo de Atendimento", "Consulta / Retorno / Exame"),
+                        ("Médico", "Dr./Dra. Nome")]:
+            rotulo(form, cam.upper(), C["bg_deep"], top=12)
+            ents[cam] = campo(form, C["bg_deep"], ph)
+
+        def salvar():
+            nome = ents["Nome do Paciente"].get().strip()
+            if not nome:
+                messagebox.showwarning("Atenção", "Nome do paciente é obrigatório.", parent=win)
+                return
+            # Gera número de senha e incrementa o contador global
+            num = _proximo_num_fila[0]
+            _proximo_num_fila[0] += 1
+            senha = f"A{num:03d}"
+            hora_chegada = time.strftime("%H:%M")
+            DB["fila"].append({
+                "senha":   senha,
+                "nome":    nome,
+                "tipo":    ents["Tipo de Atendimento"].get().strip() or "Consulta",
+                "medico":  ents["Médico"].get().strip() or "—",
+                "chegada": hora_chegada,
+                "status":  "Aguardando",
+            })
+            messagebox.showinfo("Chegada Registrada",
+                                f"Paciente: {nome}\nSenha: {senha}\nHorário: {hora_chegada}", parent=win)
+            win.destroy()
+            # Recarrega a página de fila se estiver ativa
+            if "fila" in self._at_frames:
+                self._at_frames["fila"].destroy()
+                del self._at_frames["fila"]
+                self._at_construir_fila()
+                self._at_navegar("fila")
+
+        b = tk.Button(win, text="  Registrar  →", font=("Helvetica", 12, "bold"),
+                      bg=C["accent2_dim"], fg=C["white"], activebackground=C["accent2"],
+                      relief=tk.FLAT, bd=0, pady=10, command=salvar)
+        b.pack(fill=tk.X, padx=36, pady=16)
+        b.bind("<Enter>", lambda _: b.config(bg=C["accent2"]))
+        b.bind("<Leave>", lambda _: b.config(bg=C["accent2_dim"]))
+
+    def _at_chamar_proximo(self):
+        """
+        Chama o próximo da fila:
+        - Encontra o primeiro com status 'Aguardando'
+        - Muda para 'Em atendimento'
+        - Exibe popup com dados da chamada
+        - Atualiza a tela de fila
+        """
+        proximo = next((x for x in DB["fila"] if x["status"] == "Aguardando"), None)
+        if not proximo:
+            messagebox.showinfo("Fila Vazia", "Não há pacientes aguardando no momento.")
+            return
+        proximo["status"] = "Em atendimento"
+        messagebox.showinfo("Chamando",
+                            f"Senha: {proximo['senha']}\n"
+                            f"Paciente: {proximo['nome']}\n"
+                            f"Tipo: {proximo['tipo']}\n"
+                            f"Médico: {proximo['medico']}")
+        # Recarrega a página de fila
+        if "fila" in self._at_frames:
+            self._at_frames["fila"].destroy()
+            del self._at_frames["fila"]
+            self._at_construir_fila()
+            self._at_navegar("fila")
+
+    # ── Página PACIENTES do atendente ──────────────────────────
+    def _at_construir_pacientes(self):
+        """
+        Lista de pacientes cadastrados.
+        Atendente pode cadastrar novos pacientes e buscar dados.
+        """
+        f = tk.Frame(self._at_container, bg=C["bg_deep"])
+        self._at_frames["pacientes"] = f
+
+        barra = tk.Frame(f, bg=C["bg_panel"], height=52)
+        barra.pack(fill=tk.X)
+        barra.pack_propagate(False)
+        tk.Button(barra, text="  + Cadastrar Paciente", font=("Helvetica", 11, "bold"),
+                  bg=C["accent2_dim"], fg=C["white"], activebackground=C["accent2"],
+                  relief=tk.FLAT, bd=0, padx=14, pady=6, cursor="hand2",
+                  command=self._at_cadastrar_paciente).pack(side=tk.LEFT, padx=16, pady=10)
+
+        cont = tk.Frame(f, bg=C["bg_deep"])
+        cont.pack(fill=tk.BOTH, expand=True, padx=28, pady=20)
+        tk.Label(cont, text="Cadastro de Pacientes", font=("Georgia", 18, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(anchor="w")
+        tk.Label(cont, text="Gerencie os pacientes cadastrados no sistema.", font=("Helvetica", 11), bg=C["bg_deep"], fg=C["text_mid"]).pack(anchor="w", pady=(2, 20))
+
+        # Cabeçalho da tabela
+        cab = tk.Frame(cont, bg=C["bg_panel"])
+        cab.pack(fill=tk.X)
+        for col, wd in [("Nome", 24), ("CPF", 16), ("Telefone", 16), ("Plano", 16), ("Médico Resp.", 20)]:
+            tk.Label(cab, text=col, font=("Helvetica", 9, "bold"), bg=C["bg_panel"], fg=C["text_lo"], anchor="w", width=wd).pack(side=tk.LEFT, padx=4, pady=8)
+        separador(cont, pady=0)
+
+        for i, (pid, pac) in enumerate(DB["pacientes"].items()):
+            bg = C["bg_card"] if i % 2 == 0 else C["bg_deep"]
+            row = tk.Frame(cont, bg=bg)
+            row.pack(fill=tk.X)
+            for txt, wd in [(pac["nome"], 24), (pac.get("cpf", "—"), 16),
+                            (pac.get("telefone", "—"), 16), (pac.get("plano", "Particular"), 16),
+                            (pac.get("medico_resp", "—"), 20)]:
+                tk.Label(row, text=txt, font=("Helvetica", 10), bg=bg, fg=C["text_mid"], anchor="w", width=wd).pack(side=tk.LEFT, padx=4, pady=8)
+            # Alerta de alergia
+            if pac.get("alergias", "Nenhuma") != "Nenhuma":
+                tk.Label(row, text="⚠️ Alergia", font=("Helvetica", 9, "bold"), bg=bg, fg=C["warning"]).pack(side=tk.LEFT, padx=4)
+            separador(cont, pady=0)
+
+    def _at_cadastrar_paciente(self):
+        """
+        Popup para cadastrar novo paciente pelo atendente.
+        Formulário completo com dados pessoais e de saúde.
+        """
+        win = tk.Toplevel(self.root)
+        win.title("Cadastrar Paciente")
+        win.configure(bg=C["bg_deep"])
+        win.geometry("500x600")
+        win.resizable(False, False)
+        win.grab_set()
+
+        sb = tk.Scrollbar(win, orient="vertical")
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        cv = tk.Canvas(win, bg=C["bg_deep"], highlightthickness=0, yscrollcommand=sb.set)
+        cv.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.config(command=cv.yview)
+        fc = tk.Frame(cv, bg=C["bg_deep"])
+        wid = cv.create_window((0, 0), window=fc, anchor="nw")
+        cv.bind("<Configure>", lambda e: cv.itemconfig(wid, width=e.width))
+        fc.bind("<Configure>", lambda e: cv.configure(scrollregion=cv.bbox("all")))
+
+        tk.Label(fc, text="Cadastrar Paciente", font=("Georgia", 17, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(padx=24, pady=(18, 4), anchor="w")
+        form = tk.Frame(fc, bg=C["bg_deep"])
+        form.pack(padx=24, fill=tk.X)
+
+        ents = {}
+        for cam, ph in [("Nome Completo", ""), ("CPF", "000.000.000-00"),
+                        ("Data de Nascimento", "DD/MM/AAAA"), ("Telefone", "(99) 99999-9999"),
+                        ("E-mail", "paciente@email.com"), ("Plano de Saúde", "Unimed, Particular…"),
+                        ("Tipo Sanguíneo", "A+, O-, AB+…"), ("Alergias", "Nenhuma"),
+                        ("Médico Responsável", "Dr./Dra. Nome")]:
+            rotulo(form, cam.upper(), C["bg_deep"], top=10)
+            ents[cam] = campo(form, C["bg_deep"], ph)
+
+        def salvar():
+            nome = ents["Nome Completo"].get().strip()
+            if not nome:
+                messagebox.showwarning("Atenção", "Nome é obrigatório.", parent=win)
+                return
+            novo_id = f"p{len(DB['pacientes']) + 1:03d}"
+            DB["pacientes"][novo_id] = {
+                "nome":         nome,
+                "cpf":          ents["CPF"].get().strip(),
+                "nascimento":   ents["Data de Nascimento"].get().strip(),
+                "telefone":     ents["Telefone"].get().strip(),
+                "email":        ents["E-mail"].get().strip(),
+                "plano":        ents["Plano de Saúde"].get().strip() or "Particular",
+                "tipo_sanguineo": ents["Tipo Sanguíneo"].get().strip() or "?",
+                "alergias":     ents["Alergias"].get().strip() or "Nenhuma",
+                "medico_resp":  ents["Médico Responsável"].get().strip() or "A definir",
+            }
+            messagebox.showinfo("Sucesso", f"Paciente '{nome}' cadastrado!", parent=win)
+            win.destroy()
+            # Recarrega a página de pacientes
+            if "pacientes" in self._at_frames:
+                self._at_frames["pacientes"].destroy()
+                del self._at_frames["pacientes"]
+                self._at_construir_pacientes()
+                self._at_navegar("pacientes")
+
+        b = tk.Button(form, text="  Cadastrar Paciente  →", font=("Helvetica", 12, "bold"),
+                      bg=C["accent2_dim"], fg=C["white"], activebackground=C["accent2"],
+                      relief=tk.FLAT, bd=0, pady=10, cursor="hand2", command=salvar)
+        b.pack(fill=tk.X, pady=(16, 24))
+        b.bind("<Enter>", lambda _: b.config(bg=C["accent2"]))
+        b.bind("<Leave>", lambda _: b.config(bg=C["accent2_dim"]))
+
+    # ── Página CONFIGURAÇÕES do atendente ──────────────────────
+    def _at_construir_config(self):
+        """
+        Dados do atendente (setor, turno, contato)
+        e toggles de notificações e preferências.
+        """
+        f = tk.Frame(self._at_container, bg=C["bg_deep"])
+        self._at_frames["config"] = f
+        cont = tk.Frame(f, bg=C["bg_deep"])
+        cont.pack(fill=tk.BOTH, expand=True, padx=40, pady=28)
+
+        tk.Label(cont, text="Configurações", font=("Georgia", 20, "bold"), bg=C["bg_deep"], fg=C["text_hi"]).pack(anchor="w")
+        tk.Label(cont, text="Seus dados e preferências de trabalho.", font=("Helvetica", 12), bg=C["bg_deep"], fg=C["text_mid"]).pack(anchor="w", pady=(0, 24))
+
+        u = DB["usuarios"][self._at_login]
+
+        # Card de dados do atendente
+        card = tk.Frame(cont, bg=C["bg_card"], highlightthickness=1, highlightbackground=C["border"])
+        card.pack(fill=tk.X, pady=(0, 16))
+        tk.Label(card, text="Dados do Atendente", font=("Helvetica", 12, "bold"), bg=C["bg_card"], fg=C["text_hi"]).pack(anchor="w", padx=20, pady=(14, 8))
+        separador(card, pady=0)
+        for campo_k, label_k in [("nome", "Nome"), ("setor", "Setor"), ("turno", "Turno"), ("email", "E-mail"), ("telefone", "Telefone")]:
+            row = tk.Frame(card, bg=C["bg_card"])
+            row.pack(fill=tk.X, padx=20, pady=8)
+            tk.Label(row, text=label_k, font=("Helvetica", 11), bg=C["bg_card"], fg=C["text_mid"], width=16, anchor="w").pack(side=tk.LEFT)
+            tk.Label(row, text=u.get(campo_k, "—"), font=("Helvetica", 11, "bold"), bg=C["bg_card"], fg=C["text_hi"]).pack(side=tk.LEFT)
+            separador(card, pady=0)
+        tk.Frame(card, height=8, bg=C["bg_card"]).pack()
+
+        # Seção de notificações com toggles
+        c2 = tk.Frame(cont, bg=C["bg_card"], highlightthickness=1, highlightbackground=C["border"])
+        c2.pack(fill=tk.X, pady=(0, 14))
+        tk.Label(c2, text="🔔  Notificações", font=("Helvetica", 12, "bold"), bg=C["bg_card"], fg=C["text_hi"]).pack(anchor="w", padx=20, pady=(14, 6))
+        separador(c2, pady=0)
+        for op, ini in [("Alertas de novos agendamentos", True),
+                        ("Avisos de pacientes na fila", True),
+                        ("Resumo diário por e-mail", False),
+                        ("Som ao chamar próximo da fila", True)]:
+            row = tk.Frame(c2, bg=C["bg_card"])
+            row.pack(fill=tk.X, padx=20, pady=8)
+            tk.Label(row, text=op, font=("Helvetica", 11), bg=C["bg_card"], fg=C["text_mid"]).pack(side=tk.LEFT)
+            var = tk.BooleanVar(value=ini)
+            lbl = tk.Label(row, text="Ativo" if ini else "Inativo", font=("Helvetica", 10, "bold"),
+                           bg=C["bg_card"], fg=C["success"] if ini else C["text_lo"])
+            lbl.pack(side=tk.RIGHT, padx=(0, 10))
+            def _tog(v=var, l=lbl):
+                v.set(not v.get())
+                l.config(text="Ativo" if v.get() else "Inativo", fg=C["success"] if v.get() else C["text_lo"])
+            tk.Button(row, text="Alternar", font=("Helvetica", 9), bg=C["bg_panel"], fg=C["text_mid"],
+                      activebackground=C["border"], relief=tk.FLAT, bd=0, padx=10, pady=3, cursor="hand2", command=_tog).pack(side=tk.RIGHT)
+            separador(c2, pady=0)
+        tk.Frame(c2, height=6, bg=C["bg_card"]).pack()
+
+        b = tk.Button(cont, text="  💾  Salvar Configurações", font=("Helvetica", 12, "bold"),
+                      bg=C["accent2_dim"], fg=C["white"], activebackground=C["accent2"],
+                      relief=tk.FLAT, bd=0, padx=20, pady=10, cursor="hand2",
+                      command=lambda: messagebox.showinfo("OK", "Configurações salvas! ✅", parent=self.root))
+        b.pack(anchor="w", pady=(4, 0))
+        b.bind("<Enter>", lambda _: b.config(bg=C["accent2"]))
+        b.bind("<Leave>", lambda _: b.config(bg=C["accent2_dim"]))
+
+
+# ══════════════════════════════════════════════════════════════
+#  PONTO DE ENTRADA
+#  Cria a janela raiz do tkinter e inicia o loop principal.
+# ══════════════════════════════════════════════════════════════
+def main():
+    root = tk.Tk()
+    App(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
